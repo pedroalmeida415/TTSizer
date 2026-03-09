@@ -122,7 +122,7 @@ class VocalsExtractor:
         
         with torch.no_grad():
             stems = demix(self.model_cfg, self.model, mix_tensor, self.device,
-                         model_type=self.model_type, pbar=False)
+                         model_type=self.model_type, pbar=True)
         
         target = self.model_cfg.training.get('target_instrument', 'vocals')
         vocal_key = target if target in stems else 'vocals' if 'vocals' in stems else None
