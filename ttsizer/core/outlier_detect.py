@@ -9,13 +9,13 @@ from tqdm.auto import tqdm
 import torchaudio.functional as F
 import wespeaker
 import shutil
-import tempfile
 import yaml
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from ttsizer.utils.logger import get_logger
 
 logger = get_logger("outlier_detector")
+
 
 class OutlierDetector:
     """Detects and moves audio clips that deviate from a target speaker's voice profile.
@@ -61,8 +61,9 @@ class OutlierDetector:
     def _get_embedding(self, path: Path) -> Optional[np.ndarray]:
         """Extracts a speaker embedding from an audio file.
 
-        Handles resampling to target sample rate and converts stereo to mono if needed.
-        Skips files shorter than the minimum configured duration.
+        Loads audio with soundfile, converts to mono if needed, and passes the
+        PCM tensor directly to wespeaker (avoiding temp file round-trips for
+        resampled audio).
 
         Args:
             path: Path to the audio file.
@@ -78,31 +79,18 @@ class OutlierDetector:
         sig, sr = sf.read(str(path), dtype='float32')
         sig = torch.from_numpy(np.asarray(sig))
         
-        # if > channel is found, convert to mono
+        # if > 1 channel, convert to mono
         if sig.ndim > 1 and sig.shape[-1] > 1:
             sig = torch.mean(sig, dim=-1)
         if sig.ndim == 1:
             sig = sig.unsqueeze(0)
 
-        path_for_emb = str(path)
-        tmp_file = None
-     
-        # resample to targt samplerate if required
-        if sr != self.sr:
-            sig = F.resample(sig, orig_freq=sr, new_freq=self.sr)
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                tmp_file = Path(f.name)
-            sf.write(str(tmp_file), sig.squeeze().cpu().numpy(), self.sr, subtype='PCM_16')
-            path_for_emb = str(tmp_file)
-        
-        emb = self.model.extract_embedding(path_for_emb)
-        
-        if tmp_file and tmp_file.exists():
-            tmp_file.unlink()
+        # Pass PCM tensor directly to wespeaker — handles resampling + fbank internally
+        emb = self.model.extract_embedding_from_pcm(sig.to(torch.float), sr)
 
         if emb is None or emb.size == 0 or np.isnan(emb).any():
             return None
-        return emb.flatten()
+        return emb.flatten().numpy() if isinstance(emb, torch.Tensor) else emb.flatten()
 
     def _setup_dirs(self, in_dir: Path, out_dir: Path) -> Dict[str, Dict[str, Any]]:
         """Sets up output directories for each speaker and copies initial files.
@@ -209,7 +197,7 @@ class OutlierDetector:
     def _process_speaker(
         self, spkr_dir: Path, 
         files: List[Dict[str, Any]], centroid: np.ndarray
-    ) -> Tuple[Dict[str, List[Dict]], int, int]:
+    ) -> Tuple[int, int]:
         """Processes audio files for a single speaker against their voice profile centroid.
 
         Compares each file's embedding to the centroid and moves files to 'outliers'
@@ -233,14 +221,16 @@ class OutlierDetector:
         unc_thresh = min(self.unc_thresh, self.def_thresh - 0.001)
         centroid_2d = centroid.reshape(1, -1)
 
-        for item in files:
+        # Vectorized distance computation for all files at once
+        all_embs = np.array([item['embedding'] for item in files])
+        all_dists = 1.0 - cosine_similarity(centroid_2d, all_embs)[0]
+
+        for item, dist in zip(files, all_dists):
             path = item['path']
-            emb = item['embedding'].reshape(1, -1)
             
             if not path.exists():
                 continue
 
-            dist = 1.0 - cosine_similarity(centroid_2d, emb)[0][0]
             move_dir = None
             is_def = is_unc = False
 
@@ -339,4 +329,4 @@ if __name__ == '__main__':
     
     print(f"Testing outlier detection for {in_dir}")
     detector = OutlierDetector(global_config=cfg, outlier_config=cfg["outlier_detector"])
-    detector.process_directory(in_dir, out_dir) 
+    detector.process_directory(in_dir, out_dir)
