@@ -24,6 +24,17 @@ logging.getLogger("google_genai._api_client").setLevel(logging.WARNING)
 
 logger = get_logger("llm_diarizer")
 
+from pydantic import BaseModel, Field, TypeAdapter
+from typing import Optional, List
+
+class DiarizationSegment(BaseModel):
+    start: str = Field(description="The precise start time in MM:SS.mmm format")
+    end: str = Field(description="The precise end time in MM:SS.mmm format")
+    speaker: str = Field(description="The single, consistent label determined for the speaker, or SOUND for non-speech/SFX/silence.")
+    transcript: Optional[str] = Field(description="Verbatim text with punctuation context. Use null if SOUND.")
+
+SegmentListAdapter = TypeAdapter(List[DiarizationSegment])
+
 class LLMDiarizer:
     """Handles diarization of audio files using a large language model (LLM).
     
@@ -119,10 +130,10 @@ class LLMDiarizer:
                 ],
             )
         ]
-        config = genai_types.GenerateContentConfig(
-            temperature=self.temperature,
-            safety_settings=[
-                genai_types.SafetySetting(category=c, threshold="BLOCK_NONE")
+        config = {
+            "temperature": self.temperature,
+            "safety_settings": [
+                {"category": c, "threshold": "BLOCK_NONE"}
                 for c in [
                     "HARM_CATEGORY_HARASSMENT",
                     "HARM_CATEGORY_HATE_SPEECH",
@@ -130,9 +141,10 @@ class LLMDiarizer:
                     "HARM_CATEGORY_DANGEROUS_CONTENT",
                 ]
             ],
-            response_mime_type="application/json",
-            top_p=self.top_p,
-        )
+            "response_mime_type": "application/json",
+            "response_json_schema": SegmentListAdapter.json_schema(),
+            "top_p": self.top_p,
+        }
 
         try:
             response = client.models.generate_content(
@@ -149,10 +161,11 @@ class LLMDiarizer:
                 logger.warning(f"Response blocked or empty for {norm_path.name}. Prompt Feedback: {getattr(response, 'prompt_feedback', 'No feedback.')}")
             
             try:
-                data = json.loads(json_text)
+                segments = SegmentListAdapter.validate_json(json_text)
                 with open(out_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=4, ensure_ascii=False)
-            except json.JSONDecodeError:
+                    json.dump([s.model_dump() for s in segments], f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                logger.error(f"Failed to parse structured output for {norm_path.name}: {e}")
                 debug_path = out_path.with_suffix(".raw_llm_output.txt")
                 with open(debug_path, 'w', encoding='utf-8') as f:
                     f.write(json_text)

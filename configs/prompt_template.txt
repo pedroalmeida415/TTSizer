@@ -43,10 +43,10 @@ Generate highly accurate **speaker labels (consistent throughout) and timestamps
     *   Establish distinct voice profiles early for each speaker identified. Focus on key characteristics like **pitch range, rhythm/pacing, intensity/volume patterns, accent (if any), and common emotional expressions.**
     *   Maintain a **mental registry** of each unique voice profile encountered and its *initially assigned label*.
 *   **Consistency Checkpoints & Full Context Review:**
-    *   At checkpoints (**1/3 and 2/3 marks** approx. 7-8 min and 14-16 min into dialogrue), actively **re-verify** that currently assigned labels match the established voice profiles and labels from earlier in the episode using your mental registry.
+    *   At checkpoints (**1/3 and 2/3 marks** approx. 7-8 min and 14-16 min into dialogue), actively **re-verify** that currently assigned labels match the established voice profiles and labels from earlier in the episode using your mental registry.
     *   **Crucially, before finalizing any label, consider the *entire episode's context* for that speaker.**
 *   Identify all distinct speakers present in the dialogue.
-*   **Assign Final Labels (MANDATORY CNSISTENCY):**
+*   **Assign Final Labels (MANDATORY CONSISTENCY):**
     *   **For potential Main Characters:** **Actively listen for names spoken in dialogue.** If high confidence is achieved based on **both** strong dialogue context **and** a consistent voice signature match *across the episode*, **prioritize using the character's Name.** If confidence is lacking in *either* aspect, assign a generic `Speaker N` label instead (following numbering rules below).
     *   **For all other speakers (including uncertain main characters):** Assign a unique and consistent **generic `Speaker N` label**. **Number these sequentially based on their order of first appearance** in the dialogue portions (e.g., the first non-main character encountered is `Speaker 1`, the second is `Speaker 2`, etc.).
     *   **THE SINGLE LABEL RULE:** Once a voice signature is assigned a label (e.g., "{CHARACTER_1}" or "Speaker 1"), **that exact same label MUST be used for ALL segments featuring that voice signature throughout the entire episode.** Do **NOT** switch between a name and `Speaker N`, or between different `Speaker N` numbers, for the same person.
@@ -65,6 +65,9 @@ Generate highly accurate **speaker labels (consistent throughout) and timestamps
 
 ### 4. Non-Speech Sound Handling (Dialogue Sections)
 *   Use the `SOUND` label for significant noise, SFX, or silence without dialogue within the main episode content. Provide precise `start`/`end` timestamps **in MM:SS.mmm format**. Use `null` for the transcript value.
+
+### 5. Overlapping Speech (Cross-Talk)
+*   If multiple characters speak simultaneously, attempt to separate them into closely timed consecutive segments. If they cannot be cleanly separated, prioritize transcribing and labeling the most prominent speaker or the main character. Avoid merging multiple speakers into a single segment.
 
 ---
 
@@ -143,8 +146,7 @@ Before finalizing the output, mentally perform these checks:
 1. Timeline Integrity (No weird gaps/overlaps unless intentional)
 2. **Speaker Label Consistency (CRITICAL)**: Does each unique voice have exactly one label throughout the entire episode?
 3. Timestamp Bounds & Format (Within duration, MM:SS.mmm)
-4. JSON Structure Validity
-5. Character Identification Review (Confidence criteria met for names used?)
+4. Character Identification Review (Confidence criteria met for names used?)
 
 ---
 
@@ -152,42 +154,42 @@ Before finalizing the output, mentally perform these checks:
 ```json
 [
   { 
-	  "start": "00:00.000", 
-	  "end": "01:30.500", 
-	  "speaker": "SOUND", 
-	  "transcript": null 
-	},
+    "start": "00:00.000", 
+    "end": "01:30.500", 
+    "speaker": "SOUND", 
+    "transcript": null 
+  },
   { 
-	  "start": "01:31.123", 
-	  "end": "01:34.456", 
-	  "speaker": "{CHARACTER_1}", // Identified speaker from main characters list
-	  "transcript": "..." 
-	},
+    "start": "01:31.123", 
+    "end": "01:34.456", 
+    "speaker": "{CHARACTER_1}", 
+    "transcript": "..." 
+  },
   { 
-	  "start": "01:34.800", 
-	  "end": "01:36.500", 
-	  "speaker": "SOUND", 
-	  "transcript": null 
-	},
+    "start": "01:34.800", 
+    "end": "01:36.500", 
+    "speaker": "SOUND", 
+    "transcript": null 
+  },
   { 
-	  "start": "01:37.000", 
-	  "end": "01:40.987", 
-	  "speaker": "Speaker 1", 
-	  "transcript": "..." 
-	},
-  // ... many segments later ...
+    "start": "01:37.000", 
+    "end": "01:40.987", 
+    "speaker": "Speaker 1", 
+    "transcript": "..." 
+  },
   { 
-	  "start": "19:55.200", 
-	  "end": "19:57.800", 
-	  "speaker": "{CHARACTER_1}", // Must still be same spaker label if same voice
-	  "transcript": "..." 
+    "start": "19:55.200", 
+    "end": "19:57.800", 
+    "speaker": "{CHARACTER_1}", 
+    "transcript": "..." 
   }, 
   { 
-	  "start": "22:15.000", 
-	  "end": "23:45.000", 
-	  "speaker": "SOUND", 
-	  "transcript": null 
-	}
-]```
+    "start": "22:15.000", 
+    "end": "23:45.000", 
+    "speaker": "SOUND", 
+    "transcript": null 
+  }
+]
+```
 
 Proceed with the analysis, diarization, and transcription of the **entire audio file** based on these **strict priorities, detailed full-episode processing instructions, and MANDATORY speaker label consistency.**
