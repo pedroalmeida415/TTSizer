@@ -135,29 +135,27 @@ class CTCAligner:
         """
         return re.sub(r'[\\\\/*?:\"<>|]', '', name).replace(' ', '_')
 
-    def _get_timestamps(self, audio_path: Path, text: str) -> Optional[Tuple[float, float]]:
-        """Determines the start and end timestamps of spoken text within an audio file.
-
-        Uses CTC forced alignment to find the precise timing of the provided text.
+    def _get_timestamps_from_emissions(
+        self, 
+        emissions: torch.Tensor, 
+        stride: float, 
+        text_s: list, 
+        tokens: list
+    ) -> Optional[Tuple[float, float]]:
+        """Determines the start and end timestamps of spoken text from pre-computed emissions.
 
         Args:
-            audio_path: Path to the audio file.
-            text: The transcript text to align.
+            emissions: Model emissions for the audio segment.
+            stride: Stride of the model emissions.
+            text_s: The pre-processed text split into array chunks including star tokens.
+            tokens: The pre-processed text romanized tokens ready for patching.
 
         Returns:
             A tuple (start_time, end_time) in seconds if alignment is successful,
             otherwise None.
         """
-        if not text: return None
+        if not text_s or not tokens: return None
 
-        wf = load_audio(str(audio_path), dtype=self.model.dtype, device=self.device)
-        if wf is None or wf.nelement() == 0:
-            return None
-
-        with torch.no_grad():
-            emissions, stride = generate_emissions(self.model, wf, batch_size=self.batch_size)
-        
-        tokens, text_s = preprocess_text(text, romanize=True, language=self.lang, split_size='word', star_frequency='edges')
         segments, scores, blank = patched_get_alignments(emissions, tokens, self.tokenizer)
         spans = get_spans(tokens, segments, blank)
         word_ts = postprocess_results(text_s, spans, stride, scores)
@@ -189,22 +187,25 @@ class CTCAligner:
         segment: Dict[str, Any], 
         audio: np.ndarray, 
         audio_info: Any, 
+        full_emissions: torch.Tensor,
+        stride: float,
+        preprocessed_text: Optional[Tuple[list, list]],
         out_dir: Path, 
-        temp_dir: Path, 
         counters: Dict[str, int], 
         ep_name: str
     ) -> Tuple[bool, bool, bool]: # (is_regular_saved, is_expr_saved, had_align_error)
         """Processes a single transcript segment: aligns, crops, and saves audio.
 
-        Handles regular speech segments by aligning them using _get_timestamps,
+        Handles regular speech segments by aligning them using emissions,
         and handles expression/sound-effect segments by using their original timestamps.
 
         Args:
             segment: Dictionary containing segment details (speaker, start, end, transcript).
             audio: NumPy array of the full episode audio.
             audio_info: Information about the audio file (e.g., samplerate).
-            out_dir: The base output directory for processed segments.
-            temp_dir: Path to a temporary directory for intermediate files.
+            full_emissions: Model emissions for the entire episode audio.
+            stride: Stride of the model emissions.
+            preprocessed_text: A tuple containing (tokens_starred, text_starred) from batch processing, if applicable.
             counters: Dictionary to keep track of segment counts per speaker.
             ep_name: The name of the current episode.
 
@@ -222,8 +223,12 @@ class CTCAligner:
         if not (spkr and start_str and end_str): return False, False, False 
         if spkr not in self.target_spkrs: return False, False, False 
 
-        t0 = self._time_to_sec(start_str)
-        t1 = self._time_to_sec(end_str)
+        try:
+            t0 = self._time_to_sec(start_str)
+            t1 = self._time_to_sec(end_str)
+        except ValueError:
+            return False, False, False
+            
         if t1 <= t0: return False, False, False
         
         duration = t1 - t0
@@ -241,26 +246,24 @@ class CTCAligner:
             if not text or len(text.split()) < self.min_words: return False, False, False
             if duration < self.min_duration: return False, False, False
             
+            if preprocessed_text is None: return False, False, False
+            tokens_starred, text_starred = preprocessed_text
+
             # Initial padded crop for alignment
             t0_pad = max(0.0, t0 - self.start_pad)
-            t1_pad = min(audio.shape[0], t1 + self.end_pad)
+            t1_pad = min(audio.shape[0] / audio_info.samplerate, t1 + self.end_pad)
             if t1_pad <= t0_pad:
                 return False, False, False
+
+            # Slice the global emissions map to avoid re-evaluating the CTC model
+            f0 = math.floor(t0_pad * 1000 / stride)
+            f1 = math.ceil(t1_pad * 1000 / stride)
             
-            sr = audio_info.samplerate
-            i0, i1 = math.floor(t0_pad * sr), math.ceil(t1_pad * sr)
-            if i1 <= i0: return False, False, False
-
-            chunk = audio[i0:i1]
-            if chunk.size == 0: return False, False, False
-
-            # Write temp file for alignment
-            temp_path = temp_dir / f"temp_{self._clean_name(spkr)}_{counters.get(spkr,0)}_{t0:.3f}.wav"
-            sf.write(str(temp_path), chunk, sr)
-
-            # Align
-            times = self._get_timestamps(temp_path, text)
-            if temp_path.exists(): temp_path.unlink(missing_ok=True) # Clean up temp wav
+            if f0 < f1 and f0 < full_emissions.size(0):
+                emissions_slice = full_emissions[f0:f1]
+                times = self._get_timestamps_from_emissions(emissions_slice, stride, text_starred, tokens_starred)
+            else:
+                times = None
 
             if times is None:
                 align_err = True
@@ -319,22 +322,77 @@ class CTCAligner:
         if len(audio.shape) > 1:
             audio = np.mean(audio, axis=1)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir = Path(temp_dir)
-            counters = defaultdict(int)
-            vocal_count = sound_count = 0
-            align_errors = 0
+        wf = load_audio(str(audio_path), dtype=self.model.dtype, device=self.device)
+        if wf is None or wf.nelement() == 0:
+            logger.warning(f"Audio file {audio_path.name} could not be loaded for CTC.")
+            return 0, 0, 0, len(segments)
 
-            for seg in tqdm(segments, desc="Processing Segments", unit="segment"):
-                is_vocal, is_expr, has_error = self._process_segment(
-                    seg, audio, info, out_dir, temp_dir, counters, ep_name
-                )
-                if is_vocal:
-                    vocal_count += 1
-                if is_expr:
-                    sound_count += 1
-                if has_error:
-                    align_errors += 1
+        logger.info(f"  Generating emissions for entire episode...")
+        with torch.no_grad():
+            full_emissions, stride = generate_emissions(self.model, wf, batch_size=self.batch_size)
+
+        from ctc_forced_aligner.text_utils import split_text, text_normalize, get_uroman_tokens
+        
+        split_size = 'char' if self.lang in ['jpn', 'chi'] else 'word'
+        align_tasks = []
+        all_norm_words = []
+        
+        for i, seg in enumerate(segments):
+            spkr = seg.get('speaker')
+            transcript = seg.get('transcript')
+            start_str = seg.get('start')
+            end_str = seg.get('end')
+
+            if not (spkr and start_str and end_str): continue
+            if spkr not in self.target_spkrs: continue
+            
+            try:
+                t0 = self._time_to_sec(start_str)
+                t1 = self._time_to_sec(end_str)
+            except ValueError:
+                continue
+            if t1 <= t0: continue
+            
+            duration = t1 - t0
+            is_expr = transcript.startswith(('(', '[')) and transcript.endswith((')', ']'))
+            if is_expr: continue
+            
+            text = transcript.strip() if isinstance(transcript, str) else ""
+            if not text or len(text.split()) < self.min_words: continue
+            if duration < self.min_duration: continue
+            
+            text_split = split_text(text, split_size)
+            norm_words = [text_normalize(line.strip(), self.lang) for line in text_split]
+            align_tasks.append((i, text_split, len(norm_words)))
+            all_norm_words.extend(norm_words)
+
+        preprocessed_texts = {}
+        if all_norm_words:
+            logger.info(f"  Batch romanizing {len(all_norm_words)} words through uroman...")
+            romanized_words = get_uroman_tokens(all_norm_words, self.lang)
+            
+            idx = 0
+            for (i, text_split, num_words) in align_tasks:
+                tokens = romanized_words[idx:idx+num_words]
+                idx += num_words
+                tokens_starred = ["<star>"] + tokens + ["<star>"]
+                text_starred = ["<star>"] + text_split + ["<star>"]
+                preprocessed_texts[i] = (tokens_starred, text_starred)
+
+        counters = defaultdict(int)
+        vocal_count = sound_count = 0
+        align_errors = 0
+
+        for i, seg in enumerate(tqdm(segments, desc="Processing Segments", unit="segment")):
+            is_vocal, is_expr, has_error = self._process_segment(
+                seg, audio, info, full_emissions, stride, preprocessed_texts.get(i), out_dir, counters, ep_name
+            )
+            if is_vocal:
+                vocal_count += 1
+            if is_expr:
+                sound_count += 1
+            if has_error:
+                align_errors += 1
 
         return vocal_count, sound_count, align_errors, len(segments)
 
