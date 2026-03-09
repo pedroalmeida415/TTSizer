@@ -102,7 +102,7 @@ class AudioExtractor:
             if use_aac:
                 with tempfile.TemporaryDirectory(prefix="tmp_") as tmp_dir:
                     tmp_path = Path(tmp_dir) / f"{in_path.stem}_tmp.aac"
-                    cmd_aac = ["ffmpeg", *ffmpeg_base[1:], "-c:a", "aac",
+                    cmd_aac = ["ffmpeg", *ffmpeg_base, "-c:a", "aac",
                              "-b:a", self.aac_bitrate, "-ar", self.sample_rate, str(tmp_path)]
                     subprocess.run(cmd_aac, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -110,7 +110,7 @@ class AudioExtractor:
                                "-c:a", self.codec, "-ar", self.sample_rate, str(out_path)]
                     subprocess.run(cmd_final, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             else:
-                cmd = ["ffmpeg", *ffmpeg_base[1:], "-c:a", self.codec,
+                cmd = ["ffmpeg", *ffmpeg_base, "-c:a", self.codec,
                       "-ar", self.sample_rate, str(out_path)]
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             return True
@@ -138,7 +138,7 @@ class AudioExtractor:
         workers = self.workers if self.workers is not None else multiprocessing.cpu_count()
         workers = max(1, workers)
 
-        video_exts = {'.mkv', '.mp4', '.avi', '.mov', '.webm'}
+        video_exts = {'.mkv', '.mp4', '.avi', '.mov', '.webm', '.flac', '.wav', '.mp3'}
         tasks = []
         for path in in_dir.rglob("*"):
             if path.is_file() and path.suffix.lower() in video_exts:

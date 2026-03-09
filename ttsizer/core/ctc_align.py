@@ -315,7 +315,7 @@ class CTCAligner:
         """
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        json_files = sorted(list(json_dir.glob("*.json")))
+        json_files = sorted(list(json_dir.rglob("*.json")))
         if not json_files:
             logger.warning(f"No JSON files found in {json_dir}")
             return
@@ -325,9 +325,11 @@ class CTCAligner:
         total_vocals = total_sounds = total_errors = total_segments = 0
         for json_path in tqdm(json_files, desc="Processing Episodes", unit="episode"):
             ep_name = json_path.stem
+            rel_path = json_path.relative_to(json_dir)
+            
             audio_path = None
             for fmt in ['.flac', '.wav']:
-                path = audio_dir / json_path.with_suffix(fmt).name
+                path = audio_dir / rel_path.with_suffix(fmt)
                 if path.exists():
                     audio_path = path
                     break

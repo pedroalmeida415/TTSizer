@@ -184,7 +184,7 @@ class PipelineOrchestrator:
         if not input_path: logger.error(f"Cannot run {stage_key}, input path from {STAGES[2]} is missing."); return
 
         diarizer = LLMDiarizer(self.cfg, config)
-        # diarizer.process_directory(input_path, output_path)
+        diarizer.process_directory(input_path, output_path)
         logger.info(f"--- Stage {stage_key} complete ---")
 
     def _run_ctc_align(self):

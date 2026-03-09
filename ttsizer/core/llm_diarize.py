@@ -137,9 +137,9 @@ class LLMDiarizer:
         """
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        files = sorted(list(norm_dir.glob("*.flac")))
+        files = sorted(list(norm_dir.rglob("*.flac")))
         if not files:
-            files = sorted(list(norm_dir.glob("*.wav")))
+            files = sorted(list(norm_dir.rglob("*.wav")))
         
         if not files:
             logger.warning(f"No files found in {norm_dir}")
@@ -148,7 +148,9 @@ class LLMDiarizer:
         logger.info(f"Processing {len(files)} files in {norm_dir}")
 
         for norm_path in tqdm(files, desc="Processing files", unit="file"):
-            out_path = out_dir / norm_path.with_suffix(".json").name
+            rel_path = norm_path.relative_to(norm_dir)
+            out_path = out_dir / rel_path.with_suffix(".json")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
             self._process_file(norm_path, out_path)
         
 

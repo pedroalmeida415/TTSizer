@@ -106,7 +106,7 @@ class VocalsExtractor:
             mix = mix[:ch, :]
         return mix
 
-    def _process_file(self, path: Path):
+    def _process_file(self, path: Path, out_path: Path):
         """Processes a single audio file to extract vocals.
 
         Args:
@@ -131,8 +131,7 @@ class VocalsExtractor:
             return
 
         vocals = stems[vocal_key]
-        out_name = f"{path.stem}_vocals.{self.out_fmt}"
-        out_path = self.out_dir / out_name
+
 
         subtype = self.pcm_type
         if self.out_fmt == 'wav' and subtype not in ['PCM_16', 'PCM_24', 'FLOAT']:
@@ -160,10 +159,7 @@ class VocalsExtractor:
 
         files = []
         for ext in ['*.flac', '*.wav']:
-            files.extend(in_dir.glob(ext))
-            for subdir in in_dir.iterdir():
-                if subdir.is_dir():
-                    files.extend(subdir.glob(ext))
+            files.extend(in_dir.rglob(ext))
         
         files = sorted(set(files))
 
@@ -177,14 +173,15 @@ class VocalsExtractor:
         processed = 0
 
         for path in tqdm(files, desc="Extracting vocals", unit="file"):
-            out_name = f"{path.stem}_vocals.{self.out_fmt}"
-            out_path = self.out_dir / out_name
+            rel_path = path.relative_to(in_dir)
+            out_path = self.out_dir / rel_path.with_name(f"{path.stem}_vocals.{self.out_fmt}")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
 
             if self.skip_existing and out_path.exists():
                 skipped += 1
                 continue
             
-            self._process_file(path)
+            self._process_file(path, out_path)
             processed += 1
 
         logger.info(f"Done: {processed} processed, {skipped} skipped")
