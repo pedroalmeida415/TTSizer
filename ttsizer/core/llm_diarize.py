@@ -11,8 +11,16 @@ import yaml
 from google import genai
 from google.genai import types as genai_types
 from ttsizer.utils.logger import get_logger
+import logging
+from dotenv import load_dotenv
 
 load_dotenv()
+
+# Suppress noisy Third-Party module logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("google_genai").setLevel(logging.WARNING)
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)
+logging.getLogger("google_genai._api_client").setLevel(logging.WARNING)
 
 logger = get_logger("llm_diarizer")
 
@@ -40,6 +48,7 @@ class LLMDiarizer:
         self.top_p = diarizer_config["top_p"]
         self.api_key = os.environ.get("GEMINI_API_KEY")
         self.skip = diarizer_config.get("skip_if_output_exists", True)
+        self.max_workers = diarizer_config.get("max_workers", 1)
 
         self.tmpl_file = Path(diarizer_config["prompt_template_file"])
         if not self.tmpl_file.exists():
@@ -67,7 +76,7 @@ class LLMDiarizer:
         logger.info(prompt)
         return prompt
     
-    def _process_file(self, norm_path: Path, out_path: Path):
+    def _process_file(self, norm_path: Path, out_path: Path, worker_id: int):
         """Processes a single normalized audio file to generate diarization data.
 
         Uploads the audio file, sends it to the LLM with the formatted prompt,
@@ -76,12 +85,27 @@ class LLMDiarizer:
         Args:
             norm_path: Path to the normalized input audio file.
             out_path: Path to save the output JSON diarization data.
+            worker_id: The ID of the threaded worker for UI positioning
         """
         client = genai.Client(api_key=self.api_key)
 
-        logger.info(f"Uploading {norm_path.name}...")
-        uploaded = client.files.upload(file=str(norm_path))
-        logger.info(f"Uploaded: {uploaded.uri}")
+        pbar = tqdm(total=0, bar_format="{desc}", position=worker_id, leave=False)
+        
+        import threading
+        import time
+        
+        is_waiting = True
+        def animate_waiting():
+            dots = 0
+            while is_waiting:
+                pbar.set_description(f"Wait: {norm_path.name[:18]}...{('.' * dots).ljust(3)}")
+                time.sleep(0.5)
+                dots = (dots + 1) % 4
+                
+        anim_thread = threading.Thread(target=animate_waiting)
+        anim_thread.start()
+
+        uploaded = client.files.upload(file=str(norm_path), config={'mime_type': 'audio/flac'})
 
         contents = [
             genai_types.Content(
@@ -110,21 +134,36 @@ class LLMDiarizer:
             top_p=self.top_p,
         )
 
-        response = client.models.generate_content(
-            model=self.model_name,
-            contents=contents,
-            config=config,
-        )
-        json_text = response.candidates[0].content.parts[0].text
-        
         try:
-            data = json.loads(json_text)
-            with open(out_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-        except json.JSONDecodeError:
-            debug_path = out_path.with_suffix(".raw_llm_output.txt")
-            with open(debug_path, 'w', encoding='utf-8') as f:
-                f.write(json_text)
+            response = client.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=config,
+            )
+            
+            try:
+                json_text = response.text or ""
+            except ValueError:
+                # `response.text` raises ValueError if blocked or empty
+                json_text = ""
+                logger.warning(f"Response blocked or empty for {norm_path.name}. Prompt Feedback: {getattr(response, 'prompt_feedback', 'No feedback.')}")
+            
+            try:
+                data = json.loads(json_text)
+                with open(out_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+            except json.JSONDecodeError:
+                debug_path = out_path.with_suffix(".raw_llm_output.txt")
+                with open(debug_path, 'w', encoding='utf-8') as f:
+                    f.write(json_text)
+        finally:
+            is_waiting = False
+            anim_thread.join()
+            pbar.close()
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                pass
 
     def process_directory(self, norm_dir: Path, out_dir: Path):
         """Processes all audio files (FLAC or WAV) in a given directory for diarization.
@@ -145,13 +184,38 @@ class LLMDiarizer:
             logger.warning(f"No files found in {norm_dir}")
             return
         
-        logger.info(f"Processing {len(files)} files in {norm_dir}")
+        logger.info(f"Processing {len(files)} files in {norm_dir} with {self.max_workers} workers")
 
-        for norm_path in tqdm(files, desc="Processing files", unit="file"):
+        import concurrent.futures
+        import queue
+
+        worker_queue = queue.Queue()
+        for i in range(1, self.max_workers + 1):
+            worker_queue.put(i)
+
+        def process_wrapper(norm_path: Path):
             rel_path = norm_path.relative_to(norm_dir)
             out_path = out_dir / rel_path.with_suffix(".json")
+            if self.skip and out_path.exists():
+                return
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            self._process_file(norm_path, out_path)
+            worker_id = worker_queue.get()
+            try:
+                self._process_file(norm_path, out_path, worker_id)
+            finally:
+                worker_queue.put(worker_id)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all tasks
+            future_to_path = {executor.submit(process_wrapper, p): p for p in files}
+            
+            # Use tqdm with as_completed to track progress of concurrent tasks
+            for future in tqdm(concurrent.futures.as_completed(future_to_path), total=len(files), desc="Processing files", unit="file", position=0):
+                try:
+                    future.result()
+                except Exception as exc:
+                    path = future_to_path[future]
+                    logger.error(f"File {path.name} generated an exception: {exc}", exc_info=True)
         
 
 if __name__ == '__main__':

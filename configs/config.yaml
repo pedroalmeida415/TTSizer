@@ -47,7 +47,8 @@ vocals_normalizer:
 # 4. LLM Diarization & Initial Transcription
 llm_diarizer:
   output_folder: "transcriptions"
-  model_name: "gemini-1.5-flash-preview-0514"  # LLM model for diarization
+  model_name: "gemini-3.1-flash-lite-preview"  # LLM model for diarization
+  max_workers: 5                      # Number of concurrent files to process
   temperature: 0.1                    # LLM generation temperature
   top_p: 0.8                          # LLM generation top_p
   prompt_template_file: "configs/prompt_template.txt" # Path to the prompt template for the LLM
