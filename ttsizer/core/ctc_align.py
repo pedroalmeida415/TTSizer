@@ -15,8 +15,45 @@ from transformers import AutoModelForCTC, AutoTokenizer
 import tempfile
 import yaml
 from ttsizer.utils.logger import get_logger
-from ctc_forced_aligner import (generate_emissions, get_alignments, get_spans,
+from ctc_forced_aligner import (generate_emissions, get_spans,
                                postprocess_results, preprocess_text, load_audio)
+from ctc_forced_aligner.alignment_utils import forced_align, merge_repeats
+
+def patched_get_alignments(emissions, tokens, tokenizer):
+    """Patched version of get_alignments to fix out-of-bounds target indices and vocab mismatches."""
+    assert len(tokens) > 0, "Empty transcript"
+
+    dictionary = tokenizer.get_vocab()
+    dictionary = {k.lower(): v for k, v in dictionary.items()}
+    dictionary["<star>"] = emissions.size(-1) - 1
+
+    token_indices = [
+        dictionary[c] for c in " ".join(tokens).split(" ") if c in dictionary and dictionary[c] < emissions.size(-1)
+    ]
+    if not token_indices:
+        logger.warning(f"No valid tokens found for forced alignment: {tokens}")
+        return [], [], ""
+
+    blank_id = dictionary.get("<blank>", tokenizer.pad_token_id)
+
+    if not emissions.is_cpu:
+        emissions = emissions.cpu()
+    targets = np.asarray([token_indices], dtype=np.int64)
+
+    path, scores = forced_align(
+        emissions.unsqueeze(0).float().numpy(),
+        targets,
+        blank=blank_id,
+    )
+    path = path.squeeze()
+    if hasattr(path, "tolist"):
+        path = path.tolist()
+    if not isinstance(path, list):
+        path = [path]
+
+    idx_to_token_map = {v: k for k, v in dictionary.items()}
+    segments = merge_repeats(path, idx_to_token_map)
+    return segments, scores, idx_to_token_map[blank_id]
 
 logger = get_logger("ctc_aligner")
 
@@ -121,7 +158,7 @@ class CTCAligner:
             emissions, stride = generate_emissions(self.model, wf, batch_size=self.batch_size)
         
         tokens, text_s = preprocess_text(text, romanize=True, language=self.lang, split_size='word', star_frequency='edges')
-        segments, scores, blank = get_alignments(emissions, tokens, self.tokenizer)
+        segments, scores, blank = patched_get_alignments(emissions, tokens, self.tokenizer)
         spans = get_spans(tokens, segments, blank)
         word_ts = postprocess_results(text_s, spans, stride, scores)
 
