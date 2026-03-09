@@ -218,7 +218,7 @@ def demix(
             batch_data = []
             batch_locations = []
             progress_bar = tqdm(
-                total=mix.shape[1], desc="Processing audio chunks", leave=False
+                total=mix.shape[1], desc="Processing audio chunks", leave=False, position=1
             ) if pbar else None
 
             while i < mix.shape[1]:

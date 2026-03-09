@@ -172,7 +172,7 @@ class VocalsExtractor:
         skipped = 0
         processed = 0
 
-        for path in tqdm(files, desc="Extracting vocals", unit="file"):
+        for path in tqdm(files, desc="Extracting vocals", unit="file", position=0):
             rel_path = path.relative_to(in_dir)
             out_path = self.out_dir / rel_path.with_name(f"{path.stem}_vocals.{self.out_fmt}")
             out_path.parent.mkdir(parents=True, exist_ok=True)
