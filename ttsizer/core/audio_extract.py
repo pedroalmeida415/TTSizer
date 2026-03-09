@@ -85,6 +85,9 @@ class AudioExtractor:
         Returns:
             True if extraction was successful, False otherwise.
         """
+        if out_path.exists():
+            return True
+
         streams = self._get_audio_streams(in_path)
         stream_idx = self._get_stream_idx(streams)
 
