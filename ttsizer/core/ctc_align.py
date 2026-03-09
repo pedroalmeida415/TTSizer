@@ -40,11 +40,27 @@ def patched_get_alignments(emissions, tokens, tokenizer):
         emissions = emissions.cpu()
     targets = np.asarray([token_indices], dtype=np.int64)
 
-    path, scores = forced_align(
-        emissions.unsqueeze(0).float().numpy(),
-        targets,
-        blank=blank_id,
-    )
+    # CTC requirement: T >= L. If targets are longer than audio frames, CTC fails.
+    if targets.shape[1] > emissions.shape[0]:
+        # Using print or local logger if available. logger is defined globally later.
+        try:
+            logger.warning(f"Targets length ({targets.shape[1]}) is longer than emissions length ({emissions.shape[0]}). Skipping segment.")
+        except NameError:
+            print(f"Targets length ({targets.shape[1]}) is longer than emissions length ({emissions.shape[0]}). Skipping segment.")
+        return [], [], ""
+
+    try:
+        path, scores = forced_align(
+            emissions.unsqueeze(0).float().numpy(),
+            targets,
+            blank=blank_id,
+        )
+    except RuntimeError as e:
+        try:
+            logger.warning(f"Forced alignment failed with RuntimeError: {e}")
+        except NameError:
+            print(f"Forced alignment failed with RuntimeError: {e}")
+        return [], [], ""
     path = path.squeeze()
     if hasattr(path, "tolist"):
         path = path.tolist()
@@ -157,6 +173,9 @@ class CTCAligner:
         if not text_s or not tokens: return None
 
         segments, scores, blank = patched_get_alignments(emissions, tokens, self.tokenizer)
+        if not segments:
+            return None
+            
         spans = get_spans(tokens, segments, blank)
         word_ts = postprocess_results(text_s, spans, stride, scores)
 
