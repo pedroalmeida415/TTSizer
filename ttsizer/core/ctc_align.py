@@ -221,6 +221,10 @@ class CTCAligner:
 
         # Basic validation
         if not (spkr and start_str and end_str): return False, False, False 
+
+        if spkr.upper() == "SOUND":
+            return False, True, False
+
         if spkr not in self.target_spkrs: return False, False, False 
 
         try:
@@ -232,8 +236,11 @@ class CTCAligner:
         if t1 <= t0: return False, False, False
         
         duration = t1 - t0
-        is_expr = transcript.startswith(('(', '[')) and transcript.endswith((')', ']'))
-        
+        if isinstance(transcript, str):
+            is_expr = transcript.startswith(('(', '[')) and transcript.endswith((')', ']'))
+        else:
+            is_expr = False
+            
         start_sec, end_sec = -1.0, -1.0
         align_err = False
         text = transcript if isinstance(transcript, str) else ""
@@ -344,6 +351,8 @@ class CTCAligner:
             end_str = seg.get('end')
 
             if not (spkr and start_str and end_str): continue
+            
+            if spkr.upper() == "SOUND": continue
             if spkr not in self.target_spkrs: continue
             
             try:
@@ -354,7 +363,11 @@ class CTCAligner:
             if t1 <= t0: continue
             
             duration = t1 - t0
-            is_expr = transcript.startswith(('(', '[')) and transcript.endswith((')', ']'))
+            if isinstance(transcript, str):
+                is_expr = transcript.startswith(('(', '[')) and transcript.endswith((')', ']'))
+            else:
+                is_expr = False
+                
             if is_expr: continue
             
             text = transcript.strip() if isinstance(transcript, str) else ""
